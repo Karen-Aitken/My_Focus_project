@@ -1,0 +1,305 @@
+---
+title: Sequencing the complex polyploid sugarcane genome
+subtitle: 
+short_title: Sequence analysis of single flow sorted Sugarcane chromosomes # Delete if not required
+
+author:  Karen Aitken
+affiliation: CSIRO Agriculture and Food # Or group/team
+photo: resources/img/photo.jpeg
+
+output: DSreport::project_summary
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  results = 'asis',
+  echo = FALSE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = 'center'
+)
+
+#Load libraries
+library(tidyverse)
+library(kableExtra)
+library(purrr)
+library(readr)
+```
+
+
+# Introduction
+I am a Principal Research Scientist in Agriculture and Food and my main interest is in understanding how polyploidy impacts crop genetic improvement. Before Data School I used SAS or GenStat for statistical analysis and for generating graphs either Excel or SigmaPlot. I joined Data School to learn how to create reproducible graphs from large sequence data sets. I did not have any previous experience using R language before Data School.
+
+# My Project
+Sugarcane is a complex autopolyploid with a genome size of 10 Gb condensed into 110 chromosomes. There are from 8-12 copies of each chromosome which makes genome assembly very complex. To reduce the complexity of the genome and to help in the assembly of long read data, sugarcane chromosomes from a variety R570 were flow sorted to collect individual chromosomes. The single chromosome was then amplified using multiple displacement amplification and sequenced using Illumina Hiseq. For each chromosome library a set of reads were generated these were quality trimmed then aligned to both the sugarcane R570 BAC monoploid sequence and the genome sequence of sugarcanes closest diploid relative, sorghum.  The resultant coverage reports were then tidied and used in this project to generate coverage graphs across the gene space from the R570 monoploid genome sequence and Sorghum. 
+
+## Preliminary results
+
+In this project coverage reports from the single chromosome libraies of chromosomes numbered 38 and 54 were analysed. The library of reads had been aligned to both R570 monoploid genome sequence and the sorghum genome. The coverage report was read into R. These files were tidied to remove all regions with zero reads aligned. The gene files were also read in and the gene length and mid position were calculated. The two files were joined using the column 'gene' in common between the two files. Then the percent coverage was calculated and reads that did not map to chromosomes removed. Then a plot of coverage depth of each gene was generated for each chromosome using ggplot. An example of the data is given in Table 1.  
+
+
+```{r mytable, out.width='100%', echo = FALSE}
+chrom_38<-read.csv("data/1_QC126_2C.csv")
+knitr::kable(head(chrom_38, n = 5), format = "html", caption = "Data file used for plotting gene coverage graphs") %>% 
+  kable_styling("striped")
+```
+
+## Data Visualisation
+
+Figures 1 and 2 show that chromosome 54 aligns to sugarcane chromosome 1 and chromosome 38 aligns to two different chromosomes 8 and 9 of the monoploid gene sequence. Figures 3 and 4 confirm that sugarcane chromosome 54 is colinear to sorghum chromosome 1 but indicates that chromosome 38 is a recombinant chromosome and aligns to the whole of sorghum chromosome 9 and half of chromosome 8.
+```{r}
+
+list.filenames<-list.files(path="data", pattern="*.rpt")
+#read in files
+library(readr)
+
+setwd("C:/Users/ait030/Documents/Focus_program/myproject/data")
+
+list.df<-list()
+
+for (i in 1:length(list.filenames))
+{
+  list.df[[i]]<-read_table2(list.filenames[i],col_names = FALSE)
+}
+
+#name tables according to filenames
+names<-substr(list.filenames, 1, 10)
+
+names(list.df) <- names
+
+#rename columns
+names_cols=c("gene","begin","end","number_reads")
+
+library(stats)
+
+list.df<-lapply(list.df, setNames, names_cols)
+
+#remove all with zero reads
+
+list.df<-lapply(list.df, subset, number_reads!=0)
+
+#calculate length of gene with reads (i.e.coverage)
+
+list.df<-lapply(list.df, function(DX){transform(DX,coverage =(end-begin))})
+
+#total coverage by gene
+
+list.df.sum<-lapply(list.df, function(x) {aggregate(coverage ~ gene, data = x, sum) })
+
+```
+
+```{r}
+#read in the genes gff3 file
+
+library(readr)
+genesor <- read_delim("C:/Users/ait030/Documents/Focus_program/myproject/genome/R570_genes_only.gff3", 
+    "\t", escape_double = FALSE, col_names = FALSE, 
+    trim_ws = TRUE)
+
+genes<-genesor[-c(2,6,8,9)]
+
+colnames(genes) <- c ("chromosome","gene","begin","end","orientation")
+
+library(tidyr)
+
+#calculate the length gene and the mid position
+
+genes<-genes %>% mutate(length=((end-begin)+1))
+
+genes$position<-ifelse(genes$orientation == "+",(((genes$end-genes$begin)/2) + genes$begin), (((genes$begin-genes$end)/2)+genes$end))
+
+#genes<-genes[c(1,3,8,9)]
+```
+
+```{r fig.cap="Single chromosome libraries aligned to R570 sugarcane monoploid genome"}
+#join, calculate percent coverage, remove those reads not mapped to chromosomes (select only those reads with Chr equal to Sh)
+
+library(dplyr)
+
+# join together the coverage report data and genes gff3 file data
+
+join.df<-lapply(list.df.sum, function(x) {left_join(x, genes, by="gene") })
+
+#calculate the % of each gene covered
+
+library(stats)
+
+join.df<-lapply(join.df, function(DX){transform(DX,perc_coverage =((coverage/length)*100))})
+
+join.df<-lapply(join.df, function(DX){transform(DX,Mb_position =(position/1000000))})
+
+library(stringr)
+
+#select rows with chromosome equal to Sh01 to Sh10
+
+join.df<-lapply(join.df, function(DX){transform(DX, Chr=(substr(chromosome, 1,3)))})
+
+join.df2<-lapply(join.df, function(DX){subset(DX, Chr!="Sh_")})
+
+
+```
+
+```{r fig.cap="Single chromosome library aligned to R570 sugarcane monoploid sequence"}
+library(ggplot2)
+
+
+
+for (i in seq_along(join.df2))
+{
+    p <- ggplot(data=join.df2[[i]],aes(x=Mb_position, y=perc_coverage, show.legend = FALSE, colour=factor(chromosome))) +
+    geom_point(size=0.5) + facet_wrap(~chromosome, nrow = 1, scales = 'free_x') + 
+    labs(y="% Sugarcane R570 gene coverage by reads", x="Position along chromosome (Mb)",title=paste("Mapping of chromosome", names[i])) + 
+      theme_light() + 
+      scale_x_continuous(breaks=seq(from=0, to = 80.88, by =26.9)) +
+      theme(axis.title.x=element_text(size=12), axis.title.y=element_text(size=12,margin=margin(0,0.6,0,0,"cm")), axis.text.x = element_text(size=7, margin=margin(0.1,0.5,0.6,0.5,"cm")), plot.title=element_text(hjust=0.5, size=12, margin=margin(0,0,0.7,0,"cm")), axis.line.y.right=element_line(color="black", size=0.5, linetype = "solid"), panel.spacing.x =unit(0.5,"lines")) + 
+    guides(colour=FALSE) +
+      scale_x_continuous(breaks = scales::pretty_breaks(2), limits = c(0, NA)) 
+  print(p)
+    
+}
+#dev.off()
+
+
+
+```
+
+```{r}
+list.filenames<-list.files(path="data2", pattern="*.rpt")
+#read in files
+library(readr)
+
+setwd("C:/Users/ait030/Documents/Focus_program/myproject/data2")
+
+list.df<-list()
+
+for (i in 1:length(list.filenames))
+{
+  list.df[[i]]<-read_table2(list.filenames[i],col_names = FALSE)
+}
+
+#name tables according to filenames
+names<-substr(list.filenames, 1, 10)
+
+names(list.df) <- names
+
+#rename columns
+names_cols=c("gene","begin","end","number_reads")
+
+library(stats)
+
+list.df<-lapply(list.df, setNames, names_cols)
+
+#remove all with zero reads
+
+list.df<-lapply(list.df, subset, number_reads!=0)
+
+#calculate length of gene with reads (i.e.coverage)
+
+list.df<-lapply(list.df, function(DX){transform(DX,coverage =(end-begin))})
+
+#total coverage by gene
+
+list.df.sum<-lapply(list.df, function(x) {aggregate(coverage ~ gene, data = x, sum) })
+
+```
+
+```{r}
+#read in the genes gff3 file
+
+library(readr)
+genesor <- read_delim("C:/Users/ait030/Documents/Focus_program/myproject/genome/Sbicolor_454_v3.1.1.genes_only.gff3", 
+    "\t", escape_double = FALSE, col_names = FALSE, 
+    trim_ws = TRUE)
+
+genes<-genesor[-c(2,6,8,9)]
+
+colnames(genes) <- c ("chromosome","gene","begin","end","orientation")
+
+library(tidyr)
+
+#calculate the length gene and the mid position
+
+genes<-genes %>% mutate(length=((end-begin)+1))
+
+genes$position<-ifelse(genes$orientation == "+",(((genes$end-genes$begin)/2) + genes$begin), (((genes$begin-genes$end)/2)+genes$end))
+
+#genes<-genes[c(1,3,8,9)]
+```
+
+``` {r}
+#join, calculate percent coverage, remove those reads not mapped to chromosomes (select only those reads with Chr equal to Sh)
+
+library(dplyr)
+
+# join together the coverage report data and genes gff3 file data
+
+join.df<-lapply(list.df.sum, function(x) {left_join(x, genes, by="gene") })
+
+#calculate the % of each gene covered
+
+library(stats)
+
+join.df<-lapply(join.df, function(DX){transform(DX,perc_coverage =((coverage/length)*100))})
+
+join.df<-lapply(join.df, function(DX){transform(DX,Mb_position =(position/1000000))})
+
+library(stringr)
+
+#select rows with chromosome equal to Chr01 to Chr10
+
+join.df<-lapply(join.df, function(DX){transform(DX, Chr=(substr(chromosome, 1,3)))})
+
+join.df2<-lapply(join.df, function(DX){subset(DX, Chr=="Chr")})
+
+```
+
+```{r fig.cap="Single chromosome library aligned to the sorghum genome"}
+
+library(ggplot2)
+
+
+for (i in seq_along(join.df2))
+{
+    p <- ggplot(data=join.df2[[i]],aes(x=Mb_position, y=perc_coverage, show.legend = FALSE, colour=factor(chromosome))) +
+    geom_point(size=0.5) + facet_wrap(~chromosome, nrow = 1, scales = 'free_x') + 
+    labs(y="% Sorghum gene coverage by reads", x="Position along chromosome (Mb)",title=paste("Mapping of chromosome", names[i])) + 
+      theme_light() + 
+      scale_x_continuous(breaks=seq(from=0, to = 80.88, by =26.9)) +
+      theme(axis.title.x=element_text(size=12), axis.title.y=element_text(size=12,margin=margin(0,0.6,0,0,"cm")), axis.text.x = element_text(size=7, margin=margin(0.1,0.5,0.6,0.5,"cm")), plot.title=element_text(hjust=0.5, size=12, margin=margin(0,0,0.7,0,"cm")), axis.line.y.right=element_line(color="black", size=0.5, linetype = "solid"), panel.spacing.x =unit(0.5,"lines")) + 
+    guides(colour=FALSE) +
+      scale_x_continuous(breaks = scales::pretty_breaks(2), limits = c(0, NA)) 
+  print(p)
+    
+}
+#dev.off()
+
+
+
+```
+
+# My Digital Toolbox
+
+I have learned multiple tools since I started Data School Focus these include:
+
+* tidyverse
+* ggplot
+* R-dply
+* R Markdown
+* readr
+* kableExtra
+
+![](resources/img/knitr.jpg){width=120px}
+![](resources/img/tidyverse.png){width=120px} ![](https://raw.githubusercontent.com/tidyverse/ggplot2/master/man/figures/logo.png){width=100px}
+
+
+
+# My time went ...
+
+The 10 weeks flew by and having such a great course structure helped in the transition to working from home that has happened since COVID-19. I really wanted to start to use R to tidy my data as the sequence files are so large and I was expecting that it would take a really long time. I was surprised how quickly I started to beable to troubleshoot and figure out things on my own using online resources. It helped to have so many people from data school that I could ask for advice.
+
+# Next steps
+
+Although Data School has given me an excellent foundation in data analyses using R there is still alot more skills I would like to learn, especially statistical analysis methods. I will be expanding on the analysis I have carried out here as this project has many more chromosomes to analyse and looking at the data I think there are even better ways to present this information.  
+
+# My Data School Experience
+
+I have found Data School a very positive and enjoyable experience often challenging but with the help of really good presenters who were happy to go back over anything I didn't understand I have gained many skills that I will apply to my everyday work. I really enjoyed working out how to graph my data using ggplot and using all the vast options available. I have also enjoyed comparing notes with other team members who are using R. 
